@@ -266,6 +266,7 @@ The following boolean configuration options are available:
   the future. Whether or not this feature is enabled, the metadata is all
   contained within an isolated memory region with high entropy random guard
   regions around it.
+* `CONFIG_MEMORY_TAGGING`: `true` or `false`(default) to control whether Memory Tagging Extension support is enabled. When enabled, slab allocations behave as described in [memory tagging section](#memory-tagging), and region (large) allocations get a random tag each.
 
 The following integer configuration options are available:
 

@@ -25,6 +25,20 @@
 #include <sys/mman.h>
 #endif
 
+#define ___CREEPNT_MEMTAG_SUPPORT
+
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#include <uapi/linux/prctl.h>
+#include "arm_tagging.h"
+//Bit set for free'ed areas tags - such areas have in-memory tag of MEM_TAG_FREE
+//Pre-free (old) tag is stored as (t & MEMORY_TAG_MASK)
+#define FREEED_TAG_HOLDS_PREVIOUS_BIT 0x80
+#define MEMORY_TAG_MASK 0xF
+#define IS_FREED_TAG(t) ((t & FREEED_TAG_HOLDS_PREVIOUS_BIT))
+#define GET_NON_FREED_TAG(t) (IS_FREED_TAG(t) ? MEM_TAG_FREE : t)
+#define GET_FREED_TAG(t) (IS_FREED_TAG(t) ? (t & MEMORY_TAG_MASK) : MEM_TAG_FREE)
+#endif
+
 #define SLAB_QUARANTINE (SLAB_QUARANTINE_RANDOM_LENGTH > 0 || SLAB_QUARANTINE_QUEUE_LENGTH > 0)
 #define REGION_QUARANTINE (REGION_QUARANTINE_RANDOM_LENGTH > 0 || REGION_QUARANTINE_QUEUE_LENGTH > 0)
 #define MREMAP_MOVE_THRESHOLD (32 * 1024 * 1024)
@@ -101,6 +115,9 @@ struct slab_metadata {
 #endif
 #if SLAB_QUARANTINE
     u64 quarantine_bitmap[4];
+#endif
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    u8 slot_tags[4 * 64]; //4 bitmapts * 64 slots/bitmap
 #endif
 };
 
@@ -304,6 +321,12 @@ static struct slab_metadata *alloc_metadata(struct size_class *c, size_t slab_si
     }
 
     struct slab_metadata *metadata = c->slab_info + c->metadata_count;
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    for (unsigned i = 0; i < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])); i++) {
+        metadata->slot_tags[i] = MEM_TAG_FREE;
+    }
+#endif
+
     void *slab = get_slab(c, slab_size, metadata);
     if (non_zero_size && memory_protect_rw(slab, slab_size)) {
         return NULL;
@@ -522,6 +545,13 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
             }
             stats_small_allocate(c, size);
 
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+            //This initializes the slot tag with a hardware RNG
+            p = get_tagged_pointer(p, MEM_TAG_FREE, MEM_TAG_FREE, MEM_TAG_FREE); //Empty slab, so all slots are free
+            metadata->slot_tags[slot] = get_pointer_tag(p);
+            tag_memory_from_pointer(p); //Mark memory with tag
+#endif
+
             mutex_unlock(&c->lock);
             return p;
         }
@@ -555,6 +585,16 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
             stats_slab_allocate(c, slab_size);
             stats_small_allocate(c, size);
 
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+            //Check we're not last or first slot to avoid OOB read
+            size_t previous_tag = (slot > 0) ? GET_NON_FREED_TAG(metadata->slot_tags[slot-1]) : MEM_TAG_FREE;
+            size_t next_tag = (slot < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])) - 1) ?
+               GET_NON_FREED_TAG(metadata->slot_tags[slot+1]) : MEM_TAG_FREE;           
+            p = get_tagged_pointer(p, GET_FREED_TAG(metadata->slot_tags[slot]), previous_tag, next_tag);
+            metadata->slot_tags[slot] = get_pointer_tag(p);
+            tag_memory_from_pointer(p); //Mark memory with tag
+#endif
+
             mutex_unlock(&c->lock);
             return p;
         }
@@ -576,6 +616,16 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
         }
         stats_slab_allocate(c, slab_size);
         stats_small_allocate(c, size);
+
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+        //Check we're not last or first slot to avoid OOB read
+        size_t previous_tag = (slot > 0) ? GET_NON_FREED_TAG(metadata->slot_tags[slot-1]) : MEM_TAG_FREE;
+        size_t next_tag = (slot < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])) - 1) ?
+           GET_NON_FREED_TAG(metadata->slot_tags[slot+1]) : MEM_TAG_FREE;           
+        p = get_tagged_pointer(p, GET_FREED_TAG(metadata->slot_tags[slot]), previous_tag, next_tag);
+        metadata->slot_tags[slot] = get_pointer_tag(p);
+        tag_memory_from_pointer(p); //Mark memory with tag
+#endif
 
         mutex_unlock(&c->lock);
         return p;
@@ -599,6 +649,16 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
         set_canary(metadata, p, size);
     }
     stats_small_allocate(c, size);
+
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    //Check we're not last or first slot to avoid OOB read
+    size_t previous_tag = (slot > 0) ? GET_NON_FREED_TAG(metadata->slot_tags[slot-1]) : MEM_TAG_FREE;
+    size_t next_tag = (slot < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])) - 1) ?
+       GET_NON_FREED_TAG(metadata->slot_tags[slot+1]) : MEM_TAG_FREE;           
+    p = get_tagged_pointer(p, GET_FREED_TAG(metadata->slot_tags[slot]), previous_tag, next_tag);
+    metadata->slot_tags[slot] = get_pointer_tag(p);
+    tag_memory_from_pointer(p); //Mark memory with tag
+#endif
 
     mutex_unlock(&c->lock);
     return p;
@@ -644,6 +704,15 @@ static void enqueue_free_slab(struct size_class *c, struct slab_metadata *metada
 }
 
 static inline void deallocate_small(void *p, const size_t *expected_size) {
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+//Tag memory as free
+    p = get_pointer_with_tag(p, MEM_TAG_FREE);
+    tag_memory_from_pointer(p);
+//All the pointer calculation functions generate 0-tagged pointers,
+//so we need to normalize it or compares will fail
+    p = get_pointer_with_tag(p, 0);
+#endif
+    
     struct slab_size_class_info size_class_info = slab_size_class(p);
     size_t class = size_class_info.class;
 
@@ -747,6 +816,10 @@ static inline void deallocate_small(void *p, const size_t *expected_size) {
     }
 
     clear_slot(metadata, slot);
+#ifdef ___CREEPNT_MEMTAG_SUPPORT //Markup tag as free'ed
+    metadata->slot_tags[slot] |= FREEED_TAG_HOLDS_PREVIOUS_BIT;
+
+#endif
 
     if (is_free_slab(metadata)) {
         if (metadata->prev) {
@@ -785,6 +858,9 @@ struct region_metadata {
     void *p;
     size_t size;
     size_t guard_size;
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    size_t region_tag;
+#endif
 };
 
 struct quarantine_info {
@@ -1097,6 +1173,8 @@ COLD static void init_slow_path(void) {
     ro.region_quarantine_protect = true;
     handle_bugs();
 
+    
+
     if (sysconf(_SC_PAGESIZE) != PAGE_SIZE) {
         fatal_error("runtime page size does not match compile-time page size which is not supported");
     }
@@ -1161,8 +1239,17 @@ COLD static void init_slow_path(void) {
             size_t slab_size = get_slab_size(get_slots(class), size);
             c->slab_size_divisor = libdivide_u64_gen(slab_size);
             c->slab_info = allocator_state->slab_info_mapping[arena][class].slab_info;
+        
         }
     }
+
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    for (unsigned regions_idx = 0; regions_idx < sizeof(ro.regions); regions_idx++) {
+        for (unsigned region = 0; region < MAX_REGION_TABLE_SIZE; region++) {
+            ro.regions[regions_idx][region]->region_tag = MEM_TAG_FREE;
+        }
+    }
+#endif
 
     deallocate_pages(rng, sizeof(struct random_state), PAGE_SIZE);
 
@@ -1174,6 +1261,16 @@ COLD static void init_slow_path(void) {
     memory_set_name(&ro, sizeof(ro), "malloc read-only after init");
 
     mutex_unlock(&lock);
+
+
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    //Enable tagged address ABI, synchronous MTE tag check faults and allow all tags in random set
+    //NOTE: this may need to be moved to init() under a per-thread barrier
+    if (prctl(PR_SET_TAGGED_ADDR_CTRL, PR_TAGGED_ADDR_ENABLE | PR_MTE_TCF_SYNC |
+        (0xFFFF << PR_MTE_TAG_SHIFT), 0, 0, 0)) {
+            fatal_error("prctl(PR_SET_TAGGED_ADDR_CTRL, ...) failed");
+    }
+#endif
 
     // may allocate, so wait until the allocator is initialized to avoid deadlocking
     if (pthread_atfork(full_lock, full_unlock, post_fork_child)) {
@@ -1250,8 +1347,12 @@ static void *allocate_large(size_t size) {
         return NULL;
     }
     stats_large_allocate(ra, size);
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    //This assumes that PROT_MTE is active on block
+    p = get_random_tagged_pointer(p);
+    tag_memory_from_pointer(p); //Mark memory with tag
+#endif
     mutex_unlock(&ra->lock);
-
     return p;
 }
 

@@ -11,6 +11,10 @@
 #define PR_SET_VMA_ANON_NAME 0
 #endif
 
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#include "arm_tagging.h"
+#endif
+
 #include "memory.h"
 #include "util.h"
 
@@ -26,6 +30,9 @@ void *memory_map(size_t size) {
 }
 
 bool memory_map_fixed(void *ptr, size_t size) {
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    ptr = get_pointer_with_tag(ptr, 0); //Linux mandates that arguments to mmap and mremap be non-tagged (0-tagged)
+#endif
     void *p = mmap(ptr, size, PROT_NONE, MAP_ANONYMOUS|MAP_PRIVATE|MAP_FIXED, -1, 0);
     bool ret = p == MAP_FAILED;
     if (unlikely(ret) && errno != ENOMEM) {
@@ -35,6 +42,9 @@ bool memory_map_fixed(void *ptr, size_t size) {
 }
 
 bool memory_unmap(void *ptr, size_t size) {
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    ptr = get_pointer_with_tag(ptr, 0); //Linux mandates that arguments to mmap and mremap be non-tagged (0-tagged)
+#endif
     bool ret = munmap(ptr, size);
     if (unlikely(ret) && errno != ENOMEM) {
         fatal_error("non-ENOMEM munmap failure");
@@ -55,11 +65,19 @@ static bool memory_protect_prot(void *ptr, size_t size, int prot, UNUSED int pke
 }
 
 bool memory_protect_ro(void *ptr, size_t size) {
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    return memory_protect_prot(ptr, size, PROT_READ|PROT_MTE, -1);
+#else
     return memory_protect_prot(ptr, size, PROT_READ, -1);
+#endif
 }
 
 bool memory_protect_rw(void *ptr, size_t size) {
+#ifdef ___CREEPNT_MEMTAG_SUPPORT
+    return memory_protect_prot(ptr, size, PROT_READ|PROT_WRITE|PROT_MTE, -1);
+#else
     return memory_protect_prot(ptr, size, PROT_READ|PROT_WRITE, -1);
+#endif
 }
 
 bool memory_protect_rw_metadata(void *ptr, size_t size) {
