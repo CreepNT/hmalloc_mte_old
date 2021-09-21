@@ -25,18 +25,16 @@
 #include <sys/mman.h>
 #endif
 
-#define ___CREEPNT_MEMTAG_SUPPORT
-
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
 #include <uapi/linux/prctl.h>
 #include "arm_tagging.h"
-//Bit set for free'ed areas tags - such areas have in-memory tag of MEM_TAG_FREE
-//Pre-free (old) tag is stored as (t & MEMORY_TAG_MASK)
-#define FREEED_TAG_HOLDS_PREVIOUS_BIT 0x80
-#define MEMORY_TAG_MASK 0xF
-#define IS_FREED_TAG(t) ((t & FREEED_TAG_HOLDS_PREVIOUS_BIT))
-#define GET_NON_FREED_TAG(t) (IS_FREED_TAG(t) ? MEM_TAG_FREE : t)
-#define GET_FREED_TAG(t) (IS_FREED_TAG(t) ? (t & MEMORY_TAG_MASK) : MEM_TAG_FREE)
+//Bit set for free'ed areas tags - such areas have in-memory tag of MEM_TAG_FREE,
+//but the previous (pre-free) tag is stored as (t & ~MEMTAG_SLOT_HOLDS_PREVIOUS),
+//to be reused for next allocation.
+#define MEMTAG_SLOT_HOLDS_PREVIOUS 0x80
+#define HOLDS_PREVIOUS_TAG(t) (((t) & MEMTAG_SLOT_HOLDS_PREVIOUS) != 0)
+#define GET_ACTIVE_TAG(t)   (HOLDS_PREVIOUS_TAG(t) ? MEM_TAG_FREE : t)
+#define GET_PREVIOUS_TAG(t) (HOLDS_PREVIOUS_TAG(t) ? (t & MEMTAG_SLOT_HOLDS_PREVIOUS) : MEM_TAG_FREE)
 #endif
 
 #define SLAB_QUARANTINE (SLAB_QUARANTINE_RANDOM_LENGTH > 0 || SLAB_QUARANTINE_QUEUE_LENGTH > 0)
@@ -116,7 +114,7 @@ struct slab_metadata {
 #if SLAB_QUARANTINE
     u64 quarantine_bitmap[4];
 #endif
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     u8 slot_tags[4 * 64]; //4 bitmapts * 64 slots/bitmap
 #endif
 };
@@ -321,8 +319,9 @@ static struct slab_metadata *alloc_metadata(struct size_class *c, size_t slab_si
     }
 
     struct slab_metadata *metadata = c->slab_info + c->metadata_count;
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
-    for (unsigned i = 0; i < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])); i++) {
+#ifdef CONFIG_MEMORY_TAGGING
+    //Mark all slots with free tag, to indicate they need a random tag generated
+    for (unsigned i = 0; i < array_elem_count(metadata->slot_tags); i++) {
         metadata->slot_tags[i] = MEM_TAG_FREE;
     }
 #endif
@@ -514,6 +513,25 @@ static inline void stats_slab_deallocate(UNUSED struct size_class *c, UNUSED siz
 #endif
 }
 
+#ifdef CONFIG_MEMORY_TAGGING
+static inline void* tag_slab_allocation(struct slab_metadata* metadata, size_t slot, void* p, size_t size, bool empty_slab) {
+    if (empty_slab) {
+        p = get_random_tagged_pointer(p); //Empty slab - generate random tag
+        metadata->slot_tags[slot] = get_pointer_tag(p);
+        tag_area(p, size);
+    } else {
+        //Check we're not last or first slot to avoid OOB read
+        size_t previous_tag = (slot > 0) ? GET_ACTIVE_TAG(metadata->slot_tags[slot-1]) : MEM_TAG_FREE;
+        size_t next_tag = (slot < (array_elem_count(metadata->slot_tags) - 1)) ?
+           GET_ACTIVE_TAG(metadata->slot_tags[slot+1]) : MEM_TAG_FREE;           
+        p = get_tagged_pointer(p, GET_PREVIOUS_TAG(metadata->slot_tags[slot]), previous_tag, next_tag);
+        metadata->slot_tags[slot] = get_pointer_tag(p);
+        tag_area(p, size); //Mark memory with tag
+    }
+    return p;
+}
+#endif
+
 static inline void *allocate_small(unsigned arena, size_t requested_size) {
     struct size_info info = get_size_info(requested_size);
     size_t size = info.size ? info.size : 16;
@@ -545,11 +563,8 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
             }
             stats_small_allocate(c, size);
 
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
-            //This initializes the slot tag with a hardware RNG
-            p = get_tagged_pointer(p, MEM_TAG_FREE, MEM_TAG_FREE, MEM_TAG_FREE); //Empty slab, so all slots are free
-            metadata->slot_tags[slot] = get_pointer_tag(p);
-            tag_memory_from_pointer(p); //Mark memory with tag
+#ifdef CONFIG_MEMORY_TAGGING
+            p = tag_slab_allocation(metadata, slot, p, size, true);
 #endif
 
             mutex_unlock(&c->lock);
@@ -585,14 +600,8 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
             stats_slab_allocate(c, slab_size);
             stats_small_allocate(c, size);
 
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
-            //Check we're not last or first slot to avoid OOB read
-            size_t previous_tag = (slot > 0) ? GET_NON_FREED_TAG(metadata->slot_tags[slot-1]) : MEM_TAG_FREE;
-            size_t next_tag = (slot < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])) - 1) ?
-               GET_NON_FREED_TAG(metadata->slot_tags[slot+1]) : MEM_TAG_FREE;           
-            p = get_tagged_pointer(p, GET_FREED_TAG(metadata->slot_tags[slot]), previous_tag, next_tag);
-            metadata->slot_tags[slot] = get_pointer_tag(p);
-            tag_memory_from_pointer(p); //Mark memory with tag
+#ifdef CONFIG_MEMORY_TAGGING
+            p = tag_slab_allocation(metadata, slot, p, size, false);
 #endif
 
             mutex_unlock(&c->lock);
@@ -617,14 +626,8 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
         stats_slab_allocate(c, slab_size);
         stats_small_allocate(c, size);
 
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
-        //Check we're not last or first slot to avoid OOB read
-        size_t previous_tag = (slot > 0) ? GET_NON_FREED_TAG(metadata->slot_tags[slot-1]) : MEM_TAG_FREE;
-        size_t next_tag = (slot < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])) - 1) ?
-           GET_NON_FREED_TAG(metadata->slot_tags[slot+1]) : MEM_TAG_FREE;           
-        p = get_tagged_pointer(p, GET_FREED_TAG(metadata->slot_tags[slot]), previous_tag, next_tag);
-        metadata->slot_tags[slot] = get_pointer_tag(p);
-        tag_memory_from_pointer(p); //Mark memory with tag
+#ifdef CONFIG_MEMORY_TAGGING
+        p = tag_slab_allocation(metadata, slot, p, size, false);
 #endif
 
         mutex_unlock(&c->lock);
@@ -650,14 +653,8 @@ static inline void *allocate_small(unsigned arena, size_t requested_size) {
     }
     stats_small_allocate(c, size);
 
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
-    //Check we're not last or first slot to avoid OOB read
-    size_t previous_tag = (slot > 0) ? GET_NON_FREED_TAG(metadata->slot_tags[slot-1]) : MEM_TAG_FREE;
-    size_t next_tag = (slot < (sizeof(metadata->slot_tags)/sizeof(metadata->slot_tags[0])) - 1) ?
-       GET_NON_FREED_TAG(metadata->slot_tags[slot+1]) : MEM_TAG_FREE;           
-    p = get_tagged_pointer(p, GET_FREED_TAG(metadata->slot_tags[slot]), previous_tag, next_tag);
-    metadata->slot_tags[slot] = get_pointer_tag(p);
-    tag_memory_from_pointer(p); //Mark memory with tag
+#ifdef CONFIG_MEMORY_TAGGING
+    p = tag_slab_allocation(metadata, slot, p, size, false);
 #endif
 
     mutex_unlock(&c->lock);
@@ -704,13 +701,9 @@ static void enqueue_free_slab(struct size_class *c, struct slab_metadata *metada
 }
 
 static inline void deallocate_small(void *p, const size_t *expected_size) {
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
-//Tag memory as free
-    p = get_pointer_with_tag(p, MEM_TAG_FREE);
-    tag_memory_from_pointer(p);
-//All the pointer calculation functions generate 0-tagged pointers,
-//so we need to normalize it or compares will fail
-    p = get_pointer_with_tag(p, 0);
+#ifdef CONFIG_MEMORY_TAGGING
+    void* tagged = p;
+    p = get_pointer_with_tag(p, 0); //I'm not sure whether or not pointer operations will properly ignore tag, so apply 0-tag just in case
 #endif
     
     struct slab_size_class_info size_class_info = slab_size_class(p);
@@ -740,11 +733,28 @@ static inline void deallocate_small(void *p, const size_t *expected_size) {
         fatal_error("invalid unaligned free");
     }
 
+
     if (!get_slot(metadata, slot)) {
         fatal_error("double free");
     }
 
     if (!is_zero_size) {
+#ifdef CONFIG_MEMORY_TAGGING
+        if (canary_size) {
+            u64 canary_value;
+            void* canary_addr = get_pointer_with_tag((char *)p + size - canary_size, get_pointer_tag(tagged));
+            memcpy(&canary_value, canary_addr, canary_size);
+            if (unlikely(canary_value != metadata->canary_value)) {
+                fatal_error("canary corrupted");
+            }
+        }
+
+        if (ro.zero_on_free) {
+            zero_and_tag_area_as_free(tagged, size);
+        } else {
+            tag_area_as_free(tagged, size);
+        }
+#else
         if (canary_size) {
             u64 canary_value;
             memcpy(&canary_value, (char *)p + size - canary_size, canary_size);
@@ -756,6 +766,7 @@ static inline void deallocate_small(void *p, const size_t *expected_size) {
         if (ro.zero_on_free) {
             memset(p, 0, size - canary_size);
         }
+#endif
     }
 
 #if SLAB_QUARANTINE
@@ -816,9 +827,8 @@ static inline void deallocate_small(void *p, const size_t *expected_size) {
     }
 
     clear_slot(metadata, slot);
-#ifdef ___CREEPNT_MEMTAG_SUPPORT //Markup tag as free'ed
-    metadata->slot_tags[slot] |= FREEED_TAG_HOLDS_PREVIOUS_BIT;
-
+#ifdef CONFIG_MEMORY_TAGGING //Markup slot as previous holder for next allocations
+    metadata->slot_tags[slot] |= MEMTAG_SLOT_HOLDS_PREVIOUS;
 #endif
 
     if (is_free_slab(metadata)) {
@@ -858,9 +868,6 @@ struct region_metadata {
     void *p;
     size_t size;
     size_t guard_size;
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
-    size_t region_tag;
-#endif
 };
 
 struct quarantine_info {
@@ -1243,7 +1250,7 @@ COLD static void init_slow_path(void) {
         }
     }
 
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     for (unsigned regions_idx = 0; regions_idx < sizeof(ro.regions); regions_idx++) {
         for (unsigned region = 0; region < MAX_REGION_TABLE_SIZE; region++) {
             ro.regions[regions_idx][region]->region_tag = MEM_TAG_FREE;
@@ -1263,7 +1270,7 @@ COLD static void init_slow_path(void) {
     mutex_unlock(&lock);
 
 
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     //Enable tagged address ABI, synchronous MTE tag check faults and allow all tags in random set
     //NOTE: this may need to be moved to init() under a per-thread barrier
     if (prctl(PR_SET_TAGGED_ADDR_CTRL, PR_TAGGED_ADDR_ENABLE | PR_MTE_TCF_SYNC |
@@ -1347,10 +1354,10 @@ static void *allocate_large(size_t size) {
         return NULL;
     }
     stats_large_allocate(ra, size);
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     //This assumes that PROT_MTE is active on block
     p = get_random_tagged_pointer(p);
-    tag_memory_from_pointer(p); //Mark memory with tag
+    tag_area(p, size);
 #endif
     mutex_unlock(&ra->lock);
     return p;
@@ -1363,6 +1370,10 @@ static inline void *allocate(unsigned arena, size_t size) {
 static void deallocate_large(void *p, const size_t *expected_size) {
     enforce_init();
     thread_unseal_metadata();
+
+#ifdef CONFIG_MEMORY_TAGGING
+    p = get_pointer_with_tag(p, 0); //I'm not sure whether or not pointer operations will properly ignore tag, so apply 0-tag just in case
+#endif
 
     struct region_allocator *ra = ro.region_allocator;
 

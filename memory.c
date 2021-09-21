@@ -11,7 +11,7 @@
 #define PR_SET_VMA_ANON_NAME 0
 #endif
 
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
 #include "arm_tagging.h"
 #endif
 
@@ -30,7 +30,7 @@ void *memory_map(size_t size) {
 }
 
 bool memory_map_fixed(void *ptr, size_t size) {
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     ptr = get_pointer_with_tag(ptr, 0); //Linux mandates that arguments to mmap and mremap be non-tagged (0-tagged)
 #endif
     void *p = mmap(ptr, size, PROT_NONE, MAP_ANONYMOUS|MAP_PRIVATE|MAP_FIXED, -1, 0);
@@ -42,7 +42,7 @@ bool memory_map_fixed(void *ptr, size_t size) {
 }
 
 bool memory_unmap(void *ptr, size_t size) {
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     ptr = get_pointer_with_tag(ptr, 0); //Linux mandates that arguments to mmap and mremap be non-tagged (0-tagged)
 #endif
     bool ret = munmap(ptr, size);
@@ -65,7 +65,7 @@ static bool memory_protect_prot(void *ptr, size_t size, int prot, UNUSED int pke
 }
 
 bool memory_protect_ro(void *ptr, size_t size) {
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     return memory_protect_prot(ptr, size, PROT_READ|PROT_MTE, -1);
 #else
     return memory_protect_prot(ptr, size, PROT_READ, -1);
@@ -73,7 +73,7 @@ bool memory_protect_ro(void *ptr, size_t size) {
 }
 
 bool memory_protect_rw(void *ptr, size_t size) {
-#ifdef ___CREEPNT_MEMTAG_SUPPORT
+#ifdef CONFIG_MEMORY_TAGGING
     return memory_protect_prot(ptr, size, PROT_READ|PROT_WRITE|PROT_MTE, -1);
 #else
     return memory_protect_prot(ptr, size, PROT_READ|PROT_WRITE, -1);
@@ -86,6 +86,9 @@ bool memory_protect_rw_metadata(void *ptr, size_t size) {
 
 #ifdef HAVE_COMPATIBLE_MREMAP
 bool memory_remap(void *old, size_t old_size, size_t new_size) {
+#ifdef CONFIG_MEMORY_TAGGING
+    old = get_pointer_with_tag(old, 0); //Linux mandates that arguments to mmap and mremap be non-tagged (0-tagged)
+#endif
     void *ptr = mremap(old, old_size, new_size, 0);
     bool ret = ptr == MAP_FAILED;
     if (unlikely(ret) && errno != ENOMEM) {
@@ -95,6 +98,9 @@ bool memory_remap(void *old, size_t old_size, size_t new_size) {
 }
 
 bool memory_remap_fixed(void *old, size_t old_size, void *new, size_t new_size) {
+#ifdef CONFIG_MEMORY_TAGGING
+    old = get_pointer_with_tag(old, 0); //Linux mandates that arguments to mmap and mremap be non-tagged (0-tagged)
+#endif
     void *ptr = mremap(old, old_size, new_size, MREMAP_MAYMOVE|MREMAP_FIXED, new);
     bool ret = ptr == MAP_FAILED;
     if (unlikely(ret) && errno != ENOMEM) {

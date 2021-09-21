@@ -1,5 +1,9 @@
-#define TAG_SHIFT 56
-#define MEMORY_TAG_MAX 15
+#include <stddef.h>
+
+#define GRANULE_SIZE 16 //Size, in bytes, of a granule (smallest size the CPU can tag) 
+#define DGRANULE_SIZE (2 * GRANULE_SIZE) //Size of two granules (Double GRANULE SIZE)
+
+#define MEMORY_TAG_MAX 15 //Maximum value a memory tag can take
 #define MEM_TAG_FREE MEMORY_TAG_MAX //Use the highest memory tag for free slots
 
 //Returns a tagged pointer, where the tag is different from MEM_TAG_FREE, adjacent_tag_1 and adjacent_tag_2 
@@ -8,15 +12,25 @@
 //Else, tag is the closest increment (modulo MEM_TAG_FREE) of previous_tag that meets the above criteria
 void* get_tagged_pointer(void* ptr, size_t previous_tag, size_t adjacent_tag_1, size_t adjacent_tag_2);
 
-//Returns a tagged pointer, where tag is different from MEM_TAG_FREE
+//Returns a pointer with a random tag, different from MEM_TAG_FREE
 void* get_random_tagged_pointer(void* ptr);
 
+//Returns the tag of the pointer
 size_t get_pointer_tag(void* ptr);
 
+//Returns the provided pointer, with tag changed to 'tag'
 void* get_pointer_with_tag(void* ptr, size_t tag);
 
-//Tags memory at ptr with tag inside ptr
-void tag_memory_from_pointer(void* ptr);
+/* For all the following functions, size must be GRANULE_SIZE aligned */
+//Marks size bytes starting from ptr with the tag embedded in ptr
+void tag_area(void* ptr, size_t size);
 
-//Tags memory at ptr with MEM_TAG_FREE
-void set_free_tag_on_address(void* ptr);
+//Marks size bytes starting from ptr with the MEM_TAG_FREE tag
+void tag_area_as_free(void* ptr, size_t size);
+
+//Same as tag_area, but also zeroes out the memory
+void zero_and_tag_area(void* ptr, size_t size);
+
+//Same as tag_area_as_free, but also zeroes out the memory
+void zero_and_tag_area_as_free(void* ptr, size_t size);
+

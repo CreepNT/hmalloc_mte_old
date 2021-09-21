@@ -19,6 +19,8 @@
     (void) (&_x == &_y); \
     _x > _y ? _x : _y; })
 
+#define array_elem_count(a) (sizeof((a)) / sizeof((a)[0]))
+
 #define COLD __attribute__((cold))
 #define UNUSED __attribute__((unused))
 #define EXPORT __attribute__((visibility("default")))
