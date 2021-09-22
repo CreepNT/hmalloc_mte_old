@@ -29,6 +29,7 @@ common_cflags = [
     "-DFREE_SLABS_QUARANTINE_RANDOM_LENGTH=32",
     "-DN_ARENA=1",
     "-DCONFIG_STATS=true",
+    "-DCONFIG_MEMORY_TAGGING=true",
 ]
 
 cc_defaults {
