@@ -1,5 +1,17 @@
 #include <stddef.h>
 
+/* start of Linux headers */
+//From arch/arm64/include/uapi/asm/mman.h
+#define PROT_MTE	0x20		/* Normal Tagged mapping */
+
+//From include/uapi/linux/prctl.h
+#define PR_SET_TAGGED_ADDR_CTRL 55
+#define PR_TAGGED_ADDR_ENABLE  (1UL << 0)
+#define PR_MTE_TCF_SYNC        (1UL << PR_MTE_TCF_SHIFT)
+#define PR_MTE_TAG_SHIFT       3
+/* end of Linux headers */
+
+
 #define GRANULE_SIZE 16 //Size, in bytes, of a granule (smallest size the CPU can tag) 
 #define DGRANULE_SIZE (2 * GRANULE_SIZE) //Size of two granules (Double GRANULE SIZE)
 

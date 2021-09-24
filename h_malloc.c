@@ -26,7 +26,6 @@
 #endif
 
 #if CONFIG_MEMORY_TAGGING
-#include <uapi/linux/prctl.h>
 #include "arm_tagging.h"
 //Bit set for free'ed areas tags - such areas have in-memory tag of MEM_TAG_FREE,
 //but the previous (pre-free) tag is stored as (t & ~MEMTAG_SLOT_HOLDS_PREVIOUS),
