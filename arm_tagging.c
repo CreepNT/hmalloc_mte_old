@@ -17,6 +17,14 @@ void* __set_pointer_tag(void* p, size_t tag); //Returns p with its tag replaced 
 void* __get_next_granule(void* p);  //Returns a pointer to the granule located right after the one pointed to by p in memory
 void* __get_next_dgranule(void* p); //Returns a pointer to the granule located two granules after the one pointed to by p in memory
 
+/* Prototypes for exported functions (needed by -Werror,-Wmissingprototypes) */
+void* get_random_tagged_pointer(void* ptr);
+void* get_tagged_pointer(void* ptr, size_t previous_tag, size_t adjacent_tag_1, size_t adjacent_tag_2);
+size_t get_pointer_tag(void* ptr);
+void* set_pointer_tag(void* ptr, size_t tag);
+void zero_and_tag_area(void* ptr, size_t size);
+void zero_and_tag_area_free(void* ptr, size_t size);
+
 void* get_random_tagged_pointer(void* ptr) {
     void* p;
     do {
