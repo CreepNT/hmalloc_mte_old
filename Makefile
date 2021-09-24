@@ -59,6 +59,11 @@ ifeq ($(CONFIG_CXX_ALLOCATOR),true)
     OBJECTS += new.o
 endif
 
+ifeq ($(CONFIG_MEMORY_TAGGING),true)
+    SOURCES += arm_tagging.c arm_tag_asm.S
+    OBJECTS += arm_tagging.o arm_tag_asm.o
+endif
+
 ifeq ($(CONFIG_UBSAN),true)
     CFLAGS += -fsanitize=undefined -fno-sanitize-recover=undefined
     CXXFLAGS += -fsanitize=undefined -fno-sanitize-recover=undefined
