@@ -26,6 +26,7 @@
 #endif
 
 #if CONFIG_MEMORY_TAGGING
+#include <sys/prctl.h>
 #include "arm_tagging.h"
 //Bit set for free'ed areas tags - such areas have in-memory tag of MEM_TAG_FREE,
 //but the previous (pre-free) tag is stored as (t & ~MEMTAG_SLOT_HOLDS_PREVIOUS),
@@ -1248,14 +1249,6 @@ COLD static void init_slow_path(void) {
         
         }
     }
-
-#if CONFIG_MEMORY_TAGGING
-    for (unsigned regions_idx = 0; regions_idx < sizeof(ro.regions); regions_idx++) {
-        for (unsigned region = 0; region < MAX_REGION_TABLE_SIZE; region++) {
-            ro.regions[regions_idx][region]->region_tag = MEM_TAG_FREE;
-        }
-    }
-#endif
 
     deallocate_pages(rng, sizeof(struct random_state), PAGE_SIZE);
 
