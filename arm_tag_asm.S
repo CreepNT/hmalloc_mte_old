@@ -1,8 +1,5 @@
-@Helper rountines for ARMv8.5+ memory tagging
-@Should be replaced with compiler intrinsics, when they become available
-    .equ TAG_SHIFT 56
-    .equ POINTER_ADDRESS_MASK 0xF0FFFFFFFFFFFFFF @Bottom 4 bytes of MSB
-
+/* Helper rountines for ARMv8.5+ memory tagging
+Should be replaced with compiler intrinsics, when they become available*/
     .global __insert_random_tag
     irg x0, x0
     ret
@@ -24,13 +21,14 @@
     ret
 
     .global __get_pointer_tag
-    and x0, x0, POINTER_ADDRESS_MASK
-    lsr x0, TAG_SHIFT
+    lsr x0, #56
+    and x0, #0xF
     ret
 
     .global __set_pointer_tag
-    and x0, x0, POINTER_ADDRESS_MASK
-    lsl x1, x1, TAG_SHIFT
+    movn x2, #0x0F00, LSL #48 //x2 = 0xF0F...FF
+    and x0, x0, x2 //Clear existing tag
+    lsl x1, x1, #56
     orr x0, x0, x1
     ret
 
