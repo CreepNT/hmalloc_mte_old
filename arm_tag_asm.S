@@ -21,8 +21,8 @@ Should be replaced with compiler intrinsics, when they become available*/
     ret
 
     .global __get_pointer_tag
-    lsr x0, #56
-    and x0, #0xF
+    lsr x0, x0, #56
+    and x0, x0, #0xF
     ret
 
     .global __set_pointer_tag
