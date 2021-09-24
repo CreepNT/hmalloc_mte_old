@@ -20,6 +20,7 @@ CONFIG_FREE_SLABS_QUARANTINE_RANDOM_LENGTH := 32
 CONFIG_CLASS_REGION_SIZE := 34359738368 # 32GiB
 CONFIG_N_ARENA := 4
 CONFIG_STATS := false
+CONFIG_MEMORY_TAGGING := true
 
 define safe_flag
 $(shell $(CC) $(if $(filter clang,$(CC)),-Werror=unknown-warning-option) -E $1 - </dev/null >/dev/null 2>&1 && echo $1 || echo $2)
@@ -95,6 +96,10 @@ ifeq (,$(filter $(CONFIG_STATS),true false))
     $(error CONFIG_STATS must be true or false)
 endif
 
+ifeq (,$(filter $(CONFIG_MEMORY_TAGGING),true false))
+    $(error CONFIG_MEMORY_TAGGING must be true or false)
+endif
+
 CPPFLAGS += \
     -DCONFIG_SEAL_METADATA=$(CONFIG_SEAL_METADATA) \
     -DZERO_ON_FREE=$(CONFIG_ZERO_ON_FREE) \
@@ -113,7 +118,8 @@ CPPFLAGS += \
     -DFREE_SLABS_QUARANTINE_RANDOM_LENGTH=$(CONFIG_FREE_SLABS_QUARANTINE_RANDOM_LENGTH) \
     -DCONFIG_CLASS_REGION_SIZE=$(CONFIG_CLASS_REGION_SIZE) \
     -DN_ARENA=$(CONFIG_N_ARENA) \
-    -DCONFIG_STATS=$(CONFIG_STATS)
+    -DCONFIG_STATS=$(CONFIG_STATS) \
+    -DCONFIG_MEMORY_TAGGING=$(CONFIG_MEMORY_TAGGING)
 
 libhardened_malloc.so: $(OBJECTS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -shared $^ $(LDLIBS) -o $@
